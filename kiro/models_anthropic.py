@@ -49,6 +49,8 @@ KNOWN_CONTENT_BLOCK_TYPES = {
     "tool_use",
     "tool_result",
     "tool_reference",
+    "server_tool_use",
+    "web_search_tool_result",
 }
 
 # Content block "type" values valid inside a tool_result's content array.
@@ -152,6 +154,54 @@ class ToolReferenceContentBlock(BaseModel):
 
     type: Literal["tool_reference"] = "tool_reference"
     tool_name: str
+
+    model_config = {"extra": "allow"}
+
+
+class ServerToolUseContentBlock(BaseModel):
+    """
+    Server-side tool use content block returned by Anthropic.
+
+    Claude Code can include these blocks in assistant history after native
+    tools such as web_search run. Kiro Gateway accepts them for history
+    compatibility but does not forward them as Kiro tool calls.
+    """
+
+    type: Literal["server_tool_use"] = "server_tool_use"
+    id: str
+    name: str
+    input: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+
+class WebSearchResultBlock(BaseModel):
+    """
+    Individual web search result block from Anthropic server-side tools.
+    """
+
+    type: Literal["web_search_result"] = "web_search_result"
+    title: Optional[str] = None
+    url: Optional[str] = None
+    encrypted_content: Optional[str] = None
+    page_age: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
+class WebSearchToolResultContentBlock(BaseModel):
+    """
+    Server-side web search result block returned by Anthropic.
+
+    These blocks appear in Claude Code conversation history paired with
+    server_tool_use blocks. They are accepted to preserve compatibility and
+    ignored by Kiro conversion because Kiro cannot replay Anthropic-native
+    server tool results.
+    """
+
+    type: Literal["web_search_tool_result"] = "web_search_tool_result"
+    tool_use_id: str
+    content: Union[str, List[Union[WebSearchResultBlock, Dict[str, Any]]]]
 
     model_config = {"extra": "allow"}
 
@@ -333,6 +383,8 @@ ContentBlock = Union[
     ToolUseContentBlock,
     ToolResultContentBlock,
     ToolReferenceContentBlock,
+    ServerToolUseContentBlock,
+    WebSearchToolResultContentBlock,
 ]
 
 

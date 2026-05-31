@@ -415,6 +415,33 @@ class TestContentBlockUnion:
         assert message.content[0].type == "redacted_thinking"
         assert message.content[1].type == "text"
 
+    def test_accepts_server_tool_use_and_web_search_result_blocks(self):
+        """
+        What it does: A message replaying Anthropic server-side tool history
+        (server_tool_use + web_search_tool_result) validates without a 422.
+        Purpose: Claude Code includes these blocks in assistant history after
+        native web_search runs; the gateway must accept them (#177).
+        """
+        print("Setup: assistant message with server tool history blocks...")
+        message = AnthropicMessage(
+            role="assistant",
+            content=[
+                {"type": "text", "text": "Let me search."},
+                {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "kiro"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srv_1",
+                    "content": [
+                        {"type": "web_search_result", "title": "Kiro", "url": "https://example.com"},
+                    ],
+                },
+            ],
+        )
+        assert message.content[1].type == "server_tool_use"
+        assert message.content[1].name == "web_search"
+        assert message.content[2].type == "web_search_tool_result"
+        assert message.content[2].tool_use_id == "srv_1"
+
 
 # ==================================================================================================
 # Tests for AnthropicMessage with Image Content (Issue #30 fix verification)
