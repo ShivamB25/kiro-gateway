@@ -727,27 +727,40 @@ def print_startup_banner(host: str, port: int) -> None:
     print()
 
 
-# --- Entry Point ---
-if __name__ == "__main__":
+def main() -> None:
+    """
+    Console entry point for running the Kiro Gateway server.
+
+    Parses CLI arguments, validates configuration, resolves the final
+    host/port using the priority hierarchy (CLI > env > defaults), and
+    starts the Uvicorn server.
+
+    This function is exposed as the ``kiro-gateway`` console script via
+    ``[project.scripts]`` in ``pyproject.toml`` so the application can be
+    launched with ``uv run kiro-gateway`` or after installation.
+
+    Returns:
+        None
+    """
     import uvicorn
-    
+
     # Parse CLI arguments first (handles --version, --help without requiring config)
     args = parse_cli_args()
-    
+
     # Run configuration validation before starting server
     validate_configuration()
-    
+
     # Warn about suboptimal timeout configuration
     _warn_timeout_configuration()
-    
+
     # Resolve final configuration with priority hierarchy
     final_host, final_port = resolve_server_config(args)
-    
+
     # Print startup banner
     print_startup_banner(final_host, final_port)
-    
+
     logger.info(f"Starting Uvicorn server on {final_host}:{final_port}...")
-    
+
     # Use string reference to avoid double module import
     uvicorn.run(
         "main:app",
@@ -755,3 +768,8 @@ if __name__ == "__main__":
         port=final_port,
         log_config=UVICORN_LOG_CONFIG,
     )
+
+
+# --- Entry Point ---
+if __name__ == "__main__":
+    main()
