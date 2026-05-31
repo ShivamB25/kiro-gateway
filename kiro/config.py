@@ -206,14 +206,29 @@ KIRO_REFRESH_URL_TEMPLATE: str = "https://prod.{region}.auth.desktop.kiro.dev/re
 # URL for token refresh (AWS SSO OIDC - used by kiro-cli)
 AWS_SSO_OIDC_URL_TEMPLATE: str = "https://oidc.{region}.amazonaws.com/token"
 
+# Use legacy q.amazonaws.com endpoint instead of runtime.kiro.dev.
+# Set to true for Builder ID (free tier) accounts that have no profileArn and
+# hit runtime.kiro.dev regressions (see #168, #173).
+KIRO_USE_LEGACY_ENDPOINT: bool = os.getenv(
+    "KIRO_USE_LEGACY_ENDPOINT", "false"
+).lower() in ("true", "1", "yes")
+
 # Host for main API (generateAssistantResponse)
 # Universal endpoint for all regions (us-east-1, eu-central-1, etc.)
 # See: https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/security-data-perimeter.html
 # Fixed in issue #58 - codewhisperer.{region}.amazonaws.com doesn't exist for non-us-east-1 regions
-KIRO_API_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
+KIRO_API_HOST_TEMPLATE: str = (
+    "https://q.{region}.amazonaws.com"
+    if KIRO_USE_LEGACY_ENDPOINT
+    else "https://runtime.{region}.kiro.dev"
+)
 
 # Host for Q API (ListAvailableModels)
-KIRO_Q_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
+KIRO_Q_HOST_TEMPLATE: str = (
+    "https://q.{region}.amazonaws.com"
+    if KIRO_USE_LEGACY_ENDPOINT
+    else "https://runtime.{region}.kiro.dev"
+)
 
 # ==================================================================================================
 # Token Settings

@@ -400,8 +400,14 @@ async def messages(
             conversation_id = generate_conversation_id()
             
             # Build payload for Kiro
-            # profileArn is required by runtime.kiro.dev for all auth types
-            profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
+            # profileArn handling by auth type (see #168, #150):
+            # - Builder ID (AWS_SSO_OIDC) has no native profileArn; sending it
+            #   causes a 403, so only an explicitly configured PROFILE_ARN is used.
+            # - Kiro Desktop / Enterprise IDE: use native profileArn, fall back to env.
+            if auth_manager.auth_type == AuthType.AWS_SSO_OIDC:
+                profile_arn_for_payload = PROFILE_ARN or ""
+            else:
+                profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
             
             try:
                 kiro_payload = anthropic_to_kiro(
@@ -708,8 +714,14 @@ async def messages(
     conversation_id = generate_conversation_id()
     
     # Build payload for Kiro
-    # profileArn is required by runtime.kiro.dev for all auth types
-    profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
+    # profileArn handling by auth type (see #168, #150):
+    # - Builder ID (AWS_SSO_OIDC) has no native profileArn; sending it
+    #   causes a 403, so only an explicitly configured PROFILE_ARN is used.
+    # - Kiro Desktop / Enterprise IDE: use native profileArn, fall back to env.
+    if auth_manager.auth_type == AuthType.AWS_SSO_OIDC:
+        profile_arn_for_payload = PROFILE_ARN or ""
+    else:
+        profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
     
     try:
         kiro_payload = anthropic_to_kiro(

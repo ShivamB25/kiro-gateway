@@ -515,6 +515,51 @@ class TestKiroCliDbFileConfig:
             assert str(path) == config_module.KIRO_CLI_DB_FILE
 
 
+class TestLegacyEndpointConfig:
+    """Tests for the KIRO_USE_LEGACY_ENDPOINT toggle (#175 -> #168, #173)."""
+
+    def test_default_uses_runtime_kiro_dev(self, monkeypatch):
+        """
+        What it does: With the toggle unset, hosts default to runtime.kiro.dev.
+        Purpose: Preserve the existing default endpoint behavior.
+        """
+        print("Setup: Removing KIRO_USE_LEGACY_ENDPOINT...")
+        monkeypatch.delenv("KIRO_USE_LEGACY_ENDPOINT", raising=False)
+
+        from importlib import reload
+        import kiro.config as config_module
+        reload(config_module)
+
+        try:
+            assert config_module.KIRO_USE_LEGACY_ENDPOINT is False
+            assert "runtime" in config_module.KIRO_API_HOST_TEMPLATE
+            assert "kiro.dev" in config_module.KIRO_Q_HOST_TEMPLATE
+            assert config_module.get_kiro_api_host("us-east-1") == "https://runtime.us-east-1.kiro.dev"
+        finally:
+            reload(config_module)
+
+    def test_legacy_endpoint_switches_to_amazonaws(self, monkeypatch):
+        """
+        What it does: With the toggle on, hosts switch to q.{region}.amazonaws.com.
+        Purpose: Builder ID accounts hitting runtime.kiro.dev regressions can opt
+        into the legacy endpoint.
+        """
+        print("Setup: Setting KIRO_USE_LEGACY_ENDPOINT=true...")
+        monkeypatch.setenv("KIRO_USE_LEGACY_ENDPOINT", "true")
+
+        from importlib import reload
+        import kiro.config as config_module
+        reload(config_module)
+
+        try:
+            assert config_module.KIRO_USE_LEGACY_ENDPOINT is True
+            assert config_module.get_kiro_api_host("us-east-1") == "https://q.us-east-1.amazonaws.com"
+            assert config_module.get_kiro_q_host("eu-central-1") == "https://q.eu-central-1.amazonaws.com"
+        finally:
+            monkeypatch.delenv("KIRO_USE_LEGACY_ENDPOINT", raising=False)
+            reload(config_module)
+
+
 class TestNormalizeConfigPath:
     """Tests for cross-platform configuration path normalization."""
     
