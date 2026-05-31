@@ -45,6 +45,7 @@ import json
 import logging
 import sys
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -359,6 +360,9 @@ async def lifespan(app: FastAPI):
         verify=get_ssl_verify()
     )
     logger.info("Shared HTTP client created with connection pooling")
+
+    # Record process start time for uptime reporting on /health
+    app.state.start_time = time.time()
     
     # ==============================================================================
     # Legacy Fallback: .env → credentials.json

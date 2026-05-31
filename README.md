@@ -512,11 +512,13 @@ Leave `VPN_PROXY_URL` empty (default) if you don't need proxy support.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Health check |
-| `/health` | GET | Detailed health check |
-| `/v1/models` | GET | List available models |
+| `/` | GET | Liveness check (status + version) |
+| `/health` | GET | Detailed health: version, uptime, and account-pool summary (total/initialized/healthy, models available). Returns `status: "degraded"` when accounts exist but none are usable. Best-effort fields are omitted if the account system is not ready. |
+| `/v1/models` | GET | List available models (includes upstream token limits) |
 | `/v1/chat/completions` | POST | OpenAI Chat Completions API |
+| `/v1/responses` | POST | OpenAI Responses API |
 | `/v1/messages` | POST | Anthropic Messages API |
+| `/admin/accounts/usage` | GET | Per-account credits/usage and pool status (requires API key) |
 
 ---
 

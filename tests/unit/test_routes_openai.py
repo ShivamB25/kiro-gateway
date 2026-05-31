@@ -336,6 +336,61 @@ class TestHealthEndpoint:
         print(f"Status: {response.status_code}")
         assert response.status_code == 200
 
+    def test_health_reports_account_system_flag(self, test_client):
+        """
+        What it does: Verifies /health always reports the account_system flag.
+        Purpose: Operators need to know which mode the gateway runs in; the
+        field must always be present and boolean.
+        """
+        print("Action: GET /health...")
+        response = test_client.get("/health")
+
+        body = response.json()
+        print(f"Result: {body}")
+        assert response.status_code == 200
+        assert "account_system" in body
+        assert isinstance(body["account_system"], bool)
+
+    def test_health_reports_uptime_when_available(self, test_client):
+        """
+        What it does: Verifies uptime_seconds is a non-negative number when the
+        lifespan recorded a start time.
+        Purpose: Uptime is a core observability signal for probes/dashboards.
+        """
+        print("Action: GET /health...")
+        response = test_client.get("/health")
+
+        body = response.json()
+        print(f"Result: {body}")
+        assert response.status_code == 200
+        # start_time is set in the lifespan; when present, uptime must be sane.
+        if "uptime_seconds" in body:
+            assert isinstance(body["uptime_seconds"], (int, float))
+            assert body["uptime_seconds"] >= 0
+
+    def test_health_account_pool_summary_well_formed(self, test_client):
+        """
+        What it does: When an account pool summary is present, verifies its
+        counts are coherent (initialized/healthy never exceed total).
+        Purpose: Guard the pool math so /health can't report nonsense, and
+        confirm the summary is omitted (not errored) when unavailable.
+        """
+        print("Action: GET /health...")
+        response = test_client.get("/health")
+
+        body = response.json()
+        print(f"Result: {body}")
+        assert response.status_code == 200
+        # Endpoint must always return at least the core liveness fields.
+        assert body["status"] in ("healthy", "degraded")
+        assert "version" in body and "timestamp" in body
+
+        accounts = body.get("accounts")
+        if accounts is not None:
+            assert accounts["initialized"] <= accounts["total"]
+            assert accounts["healthy"] <= accounts["initialized"]
+            assert accounts["total"] >= 0
+
 
 # =============================================================================
 # Tests for models endpoint (/v1/models)

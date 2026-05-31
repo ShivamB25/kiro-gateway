@@ -27,8 +27,13 @@ Contains all API endpoints:
 """
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Dict, Optional
+
+# Consecutive-failure count at which an account's circuit is considered tripped.
+# Mirrors the threshold used by the admin usage endpoint for a consistent view.
+CIRCUIT_TRIP_THRESHOLD = 3
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -127,18 +132,65 @@ async def root():
 
 
 @router.get("/health")
-async def health():
+async def health(request: Request):
     """
-    Detailed health check.
-    
+    Detailed health check with runtime and account-pool diagnostics.
+
+    Reports liveness plus optional, best-effort operational signals so
+    operators and uptime probes can see version, uptime, and account-pool
+    health at a glance. All pool/runtime fields are computed defensively:
+    if the account system is not ready they are simply omitted, and the
+    endpoint always returns 200 with at least status/version/timestamp.
+
+    Args:
+        request: FastAPI Request for accessing app.state.
+
     Returns:
-        Status, timestamp and version
+        A JSON-serializable dict with status, version, timestamp, uptime,
+        and (when available) account-pool summary.
     """
-    return {
+    payload: Dict[str, object] = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": APP_VERSION
+        "version": APP_VERSION,
     }
+
+    # Uptime (best-effort; start_time is set in the lifespan startup).
+    start_time = getattr(request.app.state, "start_time", None)
+    if isinstance(start_time, (int, float)):
+        payload["uptime_seconds"] = round(time.time() - start_time, 3)
+
+    # Account-pool summary (best-effort; never fail the health check).
+    account_system = getattr(request.app.state, "account_system", None)
+    payload["account_system"] = bool(account_system)
+
+    manager = getattr(request.app.state, "account_manager", None)
+    if manager is not None:
+        try:
+            accounts = manager.get_all_accounts()
+            initialized = sum(1 for a in accounts if a.auth_manager is not None)
+            healthy = sum(
+                1 for a in accounts
+                if a.auth_manager is not None and a.failures < CIRCUIT_TRIP_THRESHOLD
+            )
+            pool = {
+                "total": len(accounts),
+                "initialized": initialized,
+                "healthy": healthy,
+            }
+            try:
+                pool["models_available"] = len(manager.get_all_available_models())
+            except (AttributeError, RuntimeError) as exc:
+                logger.debug(f"/health: could not collect available models: {exc}")
+            payload["accounts"] = pool
+
+            # Degraded (not unhealthy) when accounts exist but none are usable.
+            if accounts and healthy == 0:
+                payload["status"] = "degraded"
+        except (AttributeError, RuntimeError) as exc:
+            logger.debug(f"/health: account pool summary unavailable: {exc}")
+
+    return payload
 
 @router.get("/v1/models", response_model=ModelList, dependencies=[Depends(verify_api_key)])
 async def get_models(request: Request):
