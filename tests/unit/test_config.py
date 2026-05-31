@@ -7,6 +7,7 @@ Verifies loading settings from environment variables.
 
 import pytest
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -512,6 +513,78 @@ class TestKiroCliDbFileConfig:
             path = Path(config_module.KIRO_CLI_DB_FILE)
             # Path should be constructable (doesn't raise exception)
             assert str(path) == config_module.KIRO_CLI_DB_FILE
+
+
+class TestNormalizeConfigPath:
+    """Tests for cross-platform configuration path normalization."""
+    
+    def test_expands_windows_percent_environment_variables(self, monkeypatch):
+        """
+        What it does: Verifies Windows-style %VAR% path expansion.
+        Purpose: Ensure Windows users can paste LOCALAPPDATA-based paths.
+        """
+        print("Setup: Setting LOCALAPPDATA for Windows-style path expansion...")
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")
+        from kiro.config import normalize_config_path
+        
+        result = normalize_config_path(r"%LOCALAPPDATA%\Kiro-Cli\data.sqlite3")
+        expected = str(Path(r"C:\Users\tester\AppData\Local\Kiro-Cli\data.sqlite3"))
+        
+        print(f"Normalized path: {result}")
+        assert result == expected
+    
+    def test_expands_user_home_paths(self, monkeypatch, tmp_path):
+        """
+        What it does: Verifies tilde expansion in configuration paths.
+        Purpose: Preserve existing Linux, macOS, and Windows home path support.
+        """
+        print("Setup: Setting HOME and USERPROFILE for tilde expansion...")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        from kiro.config import normalize_config_path
+        
+        result = normalize_config_path("~/.aws/sso/cache/token.json")
+        
+        print(f"Normalized path: {result}")
+        assert result == str(Path.home() / ".aws" / "sso" / "cache" / "token.json")
+    
+    def test_strips_accidental_wrapping_quotes(self):
+        """
+        What it does: Verifies paths remain usable when copied with quotes.
+        Purpose: Avoid false missing-file warnings for quoted shell values.
+        """
+        print("Setup: Normalizing a quoted Windows path...")
+        from kiro.config import normalize_config_path
+        
+        result = normalize_config_path('"C:/Users/tester/AppData/Local/Kiro-Cli/data.sqlite3"')
+        
+        print(f"Normalized path: {result}")
+        assert result == str(Path("C:/Users/tester/AppData/Local/Kiro-Cli/data.sqlite3"))
+
+    def test_empty_path_returns_empty_string(self):
+        """
+        What it does: Empty/None input yields an empty string, never raising.
+        Purpose: Unconfigured optional paths must stay falsy so existence
+        checks and bool() guards keep working unchanged.
+        """
+        from kiro.config import normalize_config_path
+
+        assert normalize_config_path("") == ""
+        assert normalize_config_path(None) == ""
+
+    def test_unknown_windows_var_left_literal(self, monkeypatch):
+        """
+        What it does: An undefined %VAR% is left untouched rather than blanked.
+        Purpose: A missing env var must not silently collapse a path to a
+        misleading partial value; surfacing the literal aids debugging.
+        """
+        monkeypatch.delenv("DEFINITELY_NOT_SET", raising=False)
+        from kiro.config import normalize_config_path
+
+        result = normalize_config_path(r"%DEFINITELY_NOT_SET%\Kiro-Cli\data.sqlite3")
+
+        print(f"Normalized path: {result}")
+        assert "%DEFINITELY_NOT_SET%" in result
 
 
 class TestFallbackModelsConfig:
