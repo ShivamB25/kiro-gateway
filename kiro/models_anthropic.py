@@ -44,6 +44,7 @@ KNOWN_CONTENT_BLOCK_TYPES = {
     "text",
     "thinking",
     "image",
+    "document",
     "tool_use",
     "tool_result",
     "tool_reference",
@@ -53,6 +54,7 @@ KNOWN_CONTENT_BLOCK_TYPES = {
 KNOWN_TOOL_RESULT_INNER_TYPES = {
     "text",
     "image",
+    "document",
     "tool_reference",
 }
 
@@ -146,7 +148,17 @@ class ToolResultContentBlock(BaseModel):
     type: Literal["tool_result"] = "tool_result"
     tool_use_id: str
     content: Optional[
-        Union[str, List[Union["TextContentBlock", "ImageContentBlock", "ToolReferenceContentBlock"]]]
+        Union[
+            str,
+            List[
+                Union[
+                    "TextContentBlock",
+                    "ImageContentBlock",
+                    "DocumentContentBlock",
+                    "ToolReferenceContentBlock",
+                ]
+            ],
+        ]
     ] = None
     is_error: Optional[bool] = None
 
@@ -233,11 +245,71 @@ class ImageContentBlock(BaseModel):
     source: Union[Base64ImageSource, URLImageSource]
 
 
+class Base64DocumentSource(BaseModel):
+    """
+    Base64-encoded document source in Anthropic format.
+
+    Claude Code sends PDFs read from disk as document blocks with base64
+    sources. Kiro has no native document input, so converters extract text
+    from supported documents and append it to the prompt.
+
+    Attributes:
+        type: Always "base64"
+        media_type: MIME type (e.g., "application/pdf", "text/plain")
+        data: Base64-encoded document data
+    """
+
+    type: Literal["base64"] = "base64"
+    media_type: str
+    data: str
+
+
+class URLDocumentSource(BaseModel):
+    """
+    URL-based document source in Anthropic format.
+
+    Note: URL document sources are not supported by Kiro Gateway and are
+    surfaced as a placeholder note rather than fetched.
+
+    Attributes:
+        type: Always "url"
+        url: HTTP(S) URL to the document
+    """
+
+    type: Literal["url"] = "url"
+    url: str
+
+
+class DocumentContentBlock(BaseModel):
+    """
+    Document content block in Anthropic format.
+
+    Represents a document such as a PDF included in a message. The source may
+    be base64-encoded, a URL, or a raw dict for forward compatibility.
+
+    Attributes:
+        type: Always "document"
+        source: Document source (base64, URL, or raw dict)
+        title: Optional document title
+        context: Optional context string supplied by the client
+        cache_control: Optional prompt-caching directive (passed through)
+    """
+
+    type: Literal["document"] = "document"
+    source: Union[Base64DocumentSource, URLDocumentSource, Dict[str, Any]]
+    title: Optional[str] = None
+    context: Optional[str] = None
+    cache_control: Optional[Dict[str, Any]] = None
+
+    model_config = {"extra": "allow"}
+
+
 # Union type for all content blocks (including images and thinking)
 ContentBlock = Union[
     TextContentBlock,
     ThinkingContentBlock,
     ImageContentBlock,
+    DocumentContentBlock,
     ToolUseContentBlock,
     ToolResultContentBlock,
     ToolReferenceContentBlock,

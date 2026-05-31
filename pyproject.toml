@@ -30,6 +30,7 @@ dependencies = [
     "loguru",
     "python-dotenv",
     "tiktoken",
+    "pypdf",
 ]
 
 [project.optional-dependencies]
