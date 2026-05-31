@@ -35,6 +35,49 @@ from pydantic import BaseModel, Field, model_validator
 # Content Block Models
 # ==================================================================================================
 
+# Content block "type" values the gateway understands. Blocks whose type is not
+# in this set are downgraded to text blocks before Pydantic validation (see
+# AnthropicMessage.sanitize_unknown_content_blocks) so unknown / forward-
+# compatible block kinds never cause a 422. Extend this set when adding a new
+# content block model rather than re-patching the validator.
+KNOWN_CONTENT_BLOCK_TYPES = {
+    "text",
+    "thinking",
+    "image",
+    "tool_use",
+    "tool_result",
+    "tool_reference",
+}
+
+# Content block "type" values valid inside a tool_result's content array.
+KNOWN_TOOL_RESULT_INNER_TYPES = {
+    "text",
+    "image",
+    "tool_reference",
+}
+
+
+def _downgrade_unknown_block(block: Any, known_types: set) -> Any:
+    """
+    Downgrade an unknown content block to a text block.
+
+    Args:
+        block: A single content block (a dict, or any other value).
+        known_types: Set of block ``type`` values to pass through untouched.
+
+    Returns:
+        The original block when its type is known (or it is not a dict),
+        otherwise a text block preserving any identifying info (text / tool name).
+    """
+    if not isinstance(block, dict) or block.get("type") in known_types:
+        return block
+    block_type = block.get("type", "unknown")
+    text = block.get("text") or block.get("tool_name") or block.get("name") or ""
+    return {
+        "type": "text",
+        "text": f"[{block_type}: {text}]" if text else f"[{block_type}]",
+    }
+
 
 class TextContentBlock(BaseModel):
     """
@@ -108,6 +151,34 @@ class ToolResultContentBlock(BaseModel):
     is_error: Optional[bool] = None
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_unknown_inner_blocks(cls, data: Any) -> Any:
+        """
+        Downgrade unknown content block types inside a tool_result's content
+        list to text blocks before validation.
+
+        Tool results may carry inner blocks whose type is not part of the
+        accepted set (e.g. a future block kind). Converting them to text keeps
+        the tool result usable instead of failing the whole request with a 422.
+        A string ``content`` (the common case) is passed through untouched.
+
+        Args:
+            data: Raw tool_result dict (or other value) prior to validation.
+
+        Returns:
+            The (possibly sanitized) input value.
+        """
+        if not isinstance(data, dict):
+            return data
+        content = data.get("content")
+        if not isinstance(content, list):
+            return data
+        data["content"] = [
+            _downgrade_unknown_block(block, KNOWN_TOOL_RESULT_INNER_TYPES) for block in content
+        ]
+        return data
 
 
 # ==================================================================================================
@@ -183,14 +254,47 @@ class AnthropicMessage(BaseModel):
     Message in Anthropic format.
 
     Attributes:
-        role: Message role (user or assistant)
+        role: Message role. The Anthropic spec only defines "user" and
+            "assistant" for the messages array (system is a top-level field),
+            but some clients (notably Claude Code on certain model ids) emit
+            other inline roles such as "system" or "developer". We accept any
+            string here and rely on ``normalize_message_roles`` in the
+            conversion pipeline to collapse unknown roles to "user" before the
+            request reaches upstream Kiro. This prevents 422s on novel roles
+            (see #190) without hardcoding a closed set.
         content: Message content (string or list of content blocks)
     """
 
-    role: Literal["user", "assistant"]
+    role: str
     content: Union[str, List[ContentBlock]]
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_unknown_content_blocks(cls, data: Any) -> Any:
+        """
+        Convert unknown content block types to text blocks before validation.
+
+        Some clients emit content blocks whose ``type`` is not part of the
+        Anthropic spec (e.g. future block kinds). Rather than rejecting the
+        whole request with a 422, we downgrade unknown blocks to a text block
+        that preserves any useful identifying info. Known types listed in
+        ``KNOWN_CONTENT_BLOCK_TYPES`` are passed through untouched.
+
+        Args:
+            data: Raw message dict (or other value) prior to validation.
+
+        Returns:
+            The (possibly sanitized) input value.
+        """
+        if not isinstance(data, dict):
+            return data
+        content = data.get("content")
+        if not isinstance(content, list):
+            return data
+        data["content"] = [_downgrade_unknown_block(block, KNOWN_CONTENT_BLOCK_TYPES) for block in content]
+        return data
 
 
 # ==================================================================================================
