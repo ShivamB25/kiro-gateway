@@ -143,6 +143,85 @@ class TestVerifyApiKey:
         print(f"Checking: HTTPException with status 401...")
         assert exc_info.value.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_valid_x_api_key_returns_true(self):
+        """
+        What it does: Verifies that a valid x-api-key header passes authentication.
+        Purpose: Ensure clients sending Anthropic-style x-api-key (e.g. hermes-cli
+                 with api_mode: anthropic_messages) can also reach OpenAI-shaped
+                 endpoints like /v1/models without sending a separate Bearer token.
+        """
+        print("Setup: Creating valid x-api-key (no Authorization)...")
+
+        print("Action: Calling verify_api_key with x-api-key only...")
+        result = await verify_api_key(auth_header=None, x_api_key=PROXY_API_KEY)
+
+        print(f"Comparing result: Expected True, Got {result}")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_invalid_x_api_key_raises_401(self):
+        """
+        What it does: Verifies that an invalid x-api-key is rejected.
+        Purpose: Ensure unauthorized access via x-api-key is blocked.
+        """
+        print("Setup: Creating invalid x-api-key...")
+
+        print("Action: Calling verify_api_key with invalid x-api-key...")
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key(auth_header=None, x_api_key="wrong_key_12345")
+
+        print("Checking: HTTPException with status 401...")
+        assert exc_info.value.status_code == 401
+        assert "Invalid or missing API Key" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_bearer_takes_precedence_over_x_api_key(self):
+        """
+        What it does: Verifies Authorization: Bearer is checked before x-api-key.
+        Purpose: Ensure a valid Bearer token wins even if x-api-key is wrong, so
+                 existing OpenAI-style clients keep their original behavior.
+        """
+        print("Setup: Valid Bearer + invalid x-api-key...")
+        valid_header = f"Bearer {PROXY_API_KEY}"
+
+        print("Action: Calling verify_api_key with both headers...")
+        result = await verify_api_key(auth_header=valid_header, x_api_key="wrong_key")
+
+        print(f"Comparing result: Expected True, Got {result}")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_used_when_bearer_invalid(self):
+        """
+        What it does: Verifies x-api-key is accepted when Bearer is invalid.
+        Purpose: Ensure fallback works when a client sends a bad Bearer header but
+                 a valid x-api-key (e.g. leftover/misconfigured Bearer).
+        """
+        print("Setup: Invalid Bearer + valid x-api-key...")
+
+        print("Action: Calling verify_api_key, only x-api-key valid...")
+        result = await verify_api_key(auth_header="Bearer wrong", x_api_key=PROXY_API_KEY)
+
+        print(f"Comparing result: Expected True, Got {result}")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_missing_both_headers_raises_401(self):
+        """
+        What it does: Verifies a request with no auth headers at all is rejected.
+        Purpose: Ensure unauthenticated requests cannot slip through now that two
+                 header paths exist.
+        """
+        print("Setup: No headers provided...")
+
+        print("Action: Calling verify_api_key with both None...")
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key(auth_header=None, x_api_key=None)
+
+        print("Checking: HTTPException with status 401...")
+        assert exc_info.value.status_code == 401
+
 
 # =============================================================================
 # Tests for root endpoint (/)
@@ -301,6 +380,21 @@ class TestModelsEndpoint:
             headers={"Authorization": f"Bearer {valid_proxy_api_key}"}
         )
         
+        print(f"Result: {response.json()}")
+        assert response.status_code == 200
+        assert response.json()["object"] == "list"
+
+    def test_models_accepts_x_api_key(self, test_client, valid_proxy_api_key):
+        """
+        What it does: Verifies the models endpoint accepts x-api-key auth.
+        Purpose: Ensure Anthropic-channel model discovery can call /v1/models.
+        """
+        print("Action: GET /v1/models with valid x-api-key...")
+        response = test_client.get(
+            "/v1/models",
+            headers={"x-api-key": valid_proxy_api_key}
+        )
+
         print(f"Result: {response.json()}")
         assert response.status_code == 200
         assert response.json()["object"] == "list"

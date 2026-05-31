@@ -28,6 +28,7 @@ Contains all API endpoints:
 
 import json
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -62,28 +63,46 @@ except ImportError:
 
 
 # --- Security scheme ---
+# Authorization: Bearer (OpenAI native)
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+# x-api-key (Anthropic native) — for clients that auto-detect the auth header
+# by api_mode and send x-api-key for /v1/models too (e.g. hermes-cli with
+# api_mode: anthropic_messages). See #162, #188.
+x_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
-async def verify_api_key(auth_header: str = Security(api_key_header)) -> bool:
+async def verify_api_key(
+    auth_header: Optional[str] = Security(api_key_header),
+    x_api_key: Optional[str] = Security(x_api_key_header),
+) -> bool:
     """
-    Verify API key in Authorization header.
-    
-    Expects format: "Bearer {PROXY_API_KEY}"
-    
+    Verify API key for OpenAI-compatible endpoints.
+
+    Supports two authentication methods:
+    1. ``Authorization: Bearer {PROXY_API_KEY}`` (OpenAI native)
+    2. ``x-api-key: {PROXY_API_KEY}`` (Anthropic native, for clients that
+       send the same header for both /v1/models and /v1/messages)
+
     Args:
         auth_header: Authorization header value
-    
+        x_api_key: x-api-key header value
+
     Returns:
         True if key is valid
-    
+
     Raises:
-        HTTPException: 401 if key is invalid or missing
+        HTTPException: 401 if neither header has a valid key
     """
-    if not auth_header or auth_header != f"Bearer {PROXY_API_KEY}":
-        logger.warning("Access attempt with invalid API key.")
-        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
-    return True
+    # Check Authorization: Bearer first (OpenAI native)
+    if auth_header and auth_header == f"Bearer {PROXY_API_KEY}":
+        return True
+
+    # Fall back to x-api-key (Anthropic native)
+    if x_api_key and x_api_key == PROXY_API_KEY:
+        return True
+
+    logger.warning("Access attempt with invalid API key.")
+    raise HTTPException(status_code=401, detail="Invalid or missing API Key")
 
 
 # --- Router ---
