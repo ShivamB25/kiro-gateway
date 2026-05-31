@@ -661,7 +661,35 @@ class TestKiroAuthManagerSqliteCredentials:
         print("Verification: Fallback refresh_token is used...")
         print(f"Comparing refresh_token: Expected 'fallback_token', Got '{manager._refresh_token}'")
         assert manager._refresh_token == "fallback_token"
-    
+
+    def test_load_credentials_closes_connection_on_midread_exception(self, temp_sqlite_db):
+        """
+        What it does: Forces an exception during the SQLite read and verifies
+        the connection is still closed via try/finally (#84).
+        Purpose: A query/parse failure mid-load must not leak the SQLite
+        connection. Without the finally block, an exception raised after
+        sqlite3.connect() but before conn.close() leaks a file handle for the
+        lifetime of the process.
+        """
+        import sqlite3 as _sqlite3
+        from unittest.mock import MagicMock, patch
+
+        fake_conn = MagicMock(name="sqlite_connection")
+        fake_cursor = MagicMock(name="sqlite_cursor")
+        fake_conn.cursor.return_value = fake_cursor
+        # Blow up on the very first query to simulate a corrupt/locked DB mid-read.
+        fake_cursor.execute.side_effect = _sqlite3.OperationalError("database is locked")
+
+        print("Setup: Creating manager, then forcing a mid-read SQLite failure...")
+        manager = KiroAuthManager(sqlite_db=temp_sqlite_db)
+
+        with patch("sqlite3.connect", return_value=fake_conn):
+            # Should swallow the error (logged) and NOT raise to the caller.
+            manager._load_credentials_from_sqlite(temp_sqlite_db)
+
+        print("Verification: connection.close() called despite the exception...")
+        fake_conn.close.assert_called_once()
+
     def test_load_credentials_from_sqlite_loads_token_data(self, temp_sqlite_db):
         """
         What it does: Verifies loading token data from SQLite.
@@ -2149,6 +2177,43 @@ class TestKiroAuthManagerSaveCredentialsToSqlite:
         
         print("Verification: No exception raised...")
         assert True
+
+    def test_save_credentials_closes_connection_on_midwrite_exception(self, tmp_path):
+        """
+        What it does: Forces an exception during the SQLite write and verifies
+        the connection is still closed via try/finally (#84).
+        Purpose: A failure while merging/writing tokens (locked DB, disk error)
+        must not leak the SQLite connection. Guards the write-back path that
+        runs on every token refresh.
+        """
+        import sqlite3 as _sqlite3
+        from unittest.mock import MagicMock, patch
+
+        # Create a real DB file so the existence check passes.
+        db_file = tmp_path / "data_close_guard.sqlite3"
+        real_conn = _sqlite3.connect(str(db_file))
+        real_conn.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        real_conn.commit()
+        real_conn.close()
+
+        manager = KiroAuthManager(refresh_token="seed")
+        manager._sqlite_db = str(db_file)
+        manager._sqlite_token_key = "kirocli:social:token"
+        manager._access_token = "rotated_access"
+        manager._refresh_token = "rotated_refresh"
+
+        fake_conn = MagicMock(name="sqlite_connection")
+        fake_cursor = MagicMock(name="sqlite_cursor")
+        fake_conn.cursor.return_value = fake_cursor
+        fake_cursor.execute.side_effect = _sqlite3.OperationalError("disk I/O error")
+
+        print("Action: Forcing a mid-write SQLite failure...")
+        with patch("sqlite3.connect", return_value=fake_conn):
+            # Error is logged and swallowed, not raised.
+            manager._save_credentials_to_sqlite()
+
+        print("Verification: connection.close() called despite the exception...")
+        fake_conn.close.assert_called_once()
 
 
 # =============================================================================
