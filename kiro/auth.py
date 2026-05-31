@@ -204,15 +204,15 @@ class KiroAuthManager:
             final_api_region = api_region_override
             logger.info(f"API region: {final_api_region} (from KIRO_API_REGION env var)")
         elif self._detected_api_region:
-            # Auto-detected from credentials (SQLite profile ARN or JSON region field)
+            # Verified API region (e.g. SQLite profile ARN). The JSON `region`
+            # field no longer populates this — it is SSO-only (issue #81).
             final_api_region = self._detected_api_region
             logger.info(f"API region: {final_api_region} (auto-detected from credentials)")
-        elif self._sso_region:
-            # Fallback to SSO region
-            final_api_region = self._sso_region
-            logger.info(f"API region: {final_api_region} (using SSO region as fallback)")
         else:
-            # Final fallback to default region
+            # Default API region. We deliberately do NOT fall back to the SSO
+            # region: the SSO/auth region is frequently unreachable as a Q API
+            # host, while the default (us-east-1) is the universally available
+            # endpoint (issue #81). OIDC token refresh still uses the SSO region.
             final_api_region = region
             logger.info(f"API region: {final_api_region} (using default)")
         
@@ -425,11 +425,16 @@ class KiroAuthManager:
             if 'profileArn' in data:
                 self._profile_arn = data['profileArn']
             if 'region' in data:
-                # Store as SSO region for OIDC token refresh
+                # Store as SSO region for OIDC/desktop token refresh ONLY.
+                # The JSON `region` is the auth region and is NOT a verified Q API
+                # region, so it must not drive the API host. runtime.{region}.kiro.dev
+                # (and codewhisperer.{region}.amazonaws.com) only exist for specific
+                # regions; a non-us-east-1 value here previously made all requests fail
+                # even though us-east-1 works (issue #81; see also #58/#132/#133).
+                # API region defaults to us-east-1 unless KIRO_API_REGION env or the
+                # per-account `api_region` parameter explicitly overrides it.
                 self._sso_region = data['region']
-                # Also use as detected API region (can be overridden by KIRO_API_REGION env var)
-                self._detected_api_region = data['region']
-                logger.debug(f"Region from JSON credentials: {data['region']}")
+                logger.debug(f"SSO region from JSON credentials: {data['region']}")
             
             # Load clientIdHash and device registration for Enterprise Kiro IDE
             if 'clientIdHash' in data:
