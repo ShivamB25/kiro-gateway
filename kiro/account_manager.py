@@ -896,3 +896,15 @@ class AccountManager:
             if account.model_resolver:
                 all_models.update(account.model_resolver.get_available_models())
         return sorted(all_models)
+
+    def get_all_accounts(self) -> List["Account"]:
+        """
+        Return all loaded accounts regardless of initialization state.
+
+        Used by the admin usage endpoint to report on every configured account,
+        including those not yet (or never) successfully initialized.
+
+        Returns:
+            List of all Account objects.
+        """
+        return list(self._accounts.values())
