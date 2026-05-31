@@ -26,8 +26,12 @@ Loads environment variables and provides typed access to them.
 
 import os
 import re
+import ssl
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
+
+from loguru import logger
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -211,6 +215,17 @@ AWS_SSO_OIDC_URL_TEMPLATE: str = "https://oidc.{region}.amazonaws.com/token"
 # hit runtime.kiro.dev regressions (see #168, #173).
 KIRO_USE_LEGACY_ENDPOINT: bool = os.getenv(
     "KIRO_USE_LEGACY_ENDPOINT", "false"
+).lower() in ("true", "1", "yes")
+
+# Allow unsafe legacy TLS renegotiation (OpenSSL 3.x disables it by default).
+# Needed behind certain corporate proxies / older TLS terminators that only
+# support pre-RFC 5746 renegotiation and otherwise trigger:
+#   [SSL: UNSAFE_LEGACY_RENEGOTIATION_DISABLED] (#187)
+# SECURITY: re-exposes the CVE-2009-3555 MITM prefix weakness. Certificate
+# verification stays ON; only the legacy-renegotiation restriction is relaxed.
+# Default: false (secure).
+KIRO_ALLOW_LEGACY_SSL_RENEGOTIATION: bool = os.getenv(
+    "KIRO_ALLOW_LEGACY_SSL_RENEGOTIATION", "false"
 ).lower() in ("true", "1", "yes")
 
 # Host for main API (generateAssistantResponse)
@@ -644,4 +659,36 @@ def get_kiro_api_host(region: str) -> str:
 def get_kiro_q_host(region: str) -> str:
     """Return Q API host for the specified region."""
     return KIRO_Q_HOST_TEMPLATE.format(region=region)
+
+
+@lru_cache(maxsize=1)
+def get_ssl_verify() -> Union[bool, ssl.SSLContext]:
+    """
+    Build the TLS verification value for all outbound httpx clients.
+
+    By default returns ``True`` (httpx default: full certificate verification).
+    When ``KIRO_ALLOW_LEGACY_SSL_RENEGOTIATION`` is enabled, returns a custom
+    ``ssl.SSLContext`` with ``OP_LEGACY_SERVER_CONNECT`` set so the gateway can
+    complete TLS handshakes with proxies / terminators that only support legacy
+    (pre-RFC 5746) renegotiation. Certificate verification stays ON; only the
+    legacy-renegotiation restriction is relaxed.
+
+    WARNING: Legacy renegotiation re-exposes the CVE-2009-3555 MITM prefix
+    weakness. This is OFF by default and must be explicitly opted into.
+
+    Returns:
+        ``True`` for the secure default, or a configured ``ssl.SSLContext``
+        when legacy renegotiation is explicitly allowed. The context is
+        memoized so a single instance is shared across all clients.
+    """
+    if not KIRO_ALLOW_LEGACY_SSL_RENEGOTIATION:
+        return True
+
+    logger.warning(
+        "KIRO_ALLOW_LEGACY_SSL_RENEGOTIATION enabled: allowing unsafe legacy "
+        "TLS renegotiation (CVE-2009-3555). Use only behind trusted proxies."
+    )
+    context = ssl.create_default_context()
+    context.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+    return context
 

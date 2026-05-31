@@ -172,7 +172,8 @@ async def call_kiro_mcp_api(
         mcp_url = f"{auth_manager.q_host}/mcp"
         logger.debug(f"Calling MCP API: {mcp_url}")
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        from kiro.config import get_ssl_verify
+        async with httpx.AsyncClient(timeout=60.0, verify=get_ssl_verify()) as client:
             response = await client.post(mcp_url, json=mcp_request, headers=headers)
             
             if response.status_code != 200:

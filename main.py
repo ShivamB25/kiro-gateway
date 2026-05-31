@@ -80,6 +80,7 @@ from kiro.config import (
     ACCOUNTS_STATE_FILE,
     normalize_config_path,
     _warn_timeout_configuration,
+    get_ssl_verify,
 )
 from kiro.auth import KiroAuthManager
 from kiro.cache import ModelInfoCache
@@ -354,7 +355,8 @@ async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(
         limits=limits,
         timeout=timeout,
-        follow_redirects=True
+        follow_redirects=True,
+        verify=get_ssl_verify()
     )
     logger.info("Shared HTTP client created with connection pooling")
     
