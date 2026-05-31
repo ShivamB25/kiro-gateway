@@ -178,6 +178,9 @@ class TestCallKiroMCPAPI:
         assert sent_body["profileArn"] == mock_auth_manager.profile_arn
         # profileArn must be top-level, not nested inside params.
         assert "profileArn" not in sent_body["params"]
+        # runtime.kiro.dev also expects the profile ARN as a header (#181).
+        sent_headers = mock_post.call_args.kwargs["headers"]
+        assert sent_headers["x-amzn-codewhisperer-profile-arn"] == mock_auth_manager.profile_arn
 
     @pytest.mark.asyncio
     async def test_mcp_api_omits_profile_arn_when_absent(self, mock_auth_manager):

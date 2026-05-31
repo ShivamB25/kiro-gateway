@@ -1360,6 +1360,34 @@ class TestAnthropicTool:
         
         print(f"Comparing max_uses: Expected 5, Got {tool.max_uses}")
         assert tool.max_uses == 5
+
+    def test_server_side_tool_without_name_valid(self):
+        """
+        What it does: A server-side tool (with a type field) is valid even
+        without a name.
+        Purpose: Per #181, name is optional for server-side tools; only
+        user-defined tools (no type) require a name.
+        """
+        print("Setup: Creating server-side tool without a name...")
+        tool = AnthropicTool(type="web_search_20250305", max_uses=3)
+
+        print(f"Comparing type: Expected 'web_search_20250305', Got '{tool.type}'")
+        assert tool.type == "web_search_20250305"
+        print(f"Comparing name: Expected None, Got {tool.name}")
+        assert tool.name is None
+
+    def test_user_defined_tool_without_name_invalid(self):
+        """
+        What it does: A user-defined tool (no type) without a name is rejected.
+        Purpose: Ensure the name requirement still applies to user-defined tools
+        even though the field is now Optional at the schema level (#181).
+        """
+        print("Setup: Attempting to create user-defined tool without name...")
+        with pytest.raises(ValidationError) as exc_info:
+            AnthropicTool(input_schema={"type": "object"})
+
+        print(f"ValidationError raised: {exc_info.value}")
+        assert "name" in str(exc_info.value)
     
     def test_user_defined_tool_without_input_schema_invalid(self):
         """

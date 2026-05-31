@@ -30,6 +30,7 @@ The core layer provides a unified interface that API-specific adapters use
 to convert their formats to Kiro API format.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -744,46 +745,63 @@ def process_tools_with_long_descriptions(
     return processed_tools if processed_tools else None, tool_documentation
 
 
+# Global mapping for tool name truncation (short_name -> original_name).
+# Kiro enforces a 64-char tool-name limit; rather than rejecting requests we
+# shorten long names and restore them on the response path. This is process-wide
+# shared state; md5 suffixes keep shortened names collision-resistant.
+_tool_name_map: Dict[str, str] = {}
+
+
+def _shorten_tool_name(name: str) -> str:
+    """
+    Shorten a tool name to fit the 64-char Kiro API limit using a hash suffix.
+
+    Args:
+        name: Original tool name.
+
+    Returns:
+        The original name if within the limit, otherwise the first 56 chars
+        plus an underscore and a 7-char md5 suffix for uniqueness.
+    """
+    if len(name) <= 64:
+        return name
+    h = hashlib.md5(name.encode()).hexdigest()[:7]
+    return name[:56] + "_" + h
+
+
+def get_original_tool_name(short_name: str) -> str:
+    """
+    Reverse-map a shortened tool name back to its original.
+
+    Args:
+        short_name: Possibly-shortened tool name from an upstream response.
+
+    Returns:
+        The original tool name if a mapping exists, otherwise ``short_name``.
+    """
+    return _tool_name_map.get(short_name, short_name)
+
+
 def validate_tool_names(tools: Optional[List[UnifiedTool]]) -> None:
     """
-    Validates tool names against Kiro API 64-character limit.
-    
-    Logs WARNING for each problematic tool and raises ValueError
-    with complete list of violations.
-    
+    Truncates tool names that exceed the Kiro API 64-character limit.
+
+    Instead of rejecting requests, long names are shortened with a hash suffix
+    and a reverse mapping is stored (see ``_tool_name_map``) so streamed
+    responses can restore the original names via ``get_original_tool_name``.
+
     Args:
-        tools: List of tools to validate
-    
-    Raises:
-        ValueError: If any tool name exceeds 64 characters
-    
-    Example:
-        >>> validate_tool_names([UnifiedTool(name="short_name", description="test")])
-        # No error
-        >>> validate_tool_names([UnifiedTool(name="a" * 70, description="test")])
-        # Raises ValueError with detailed message
+        tools: List of tools to validate/fix (mutated in place).
     """
     if not tools:
         return
-    
-    problematic_tools = []
+
     for tool in tools:
         if len(tool.name) > 64:
-            problematic_tools.append((tool.name, len(tool.name)))
-    
-    if problematic_tools:
-        # Build detailed error message for client (no logging here - routes will log)
-        tool_list = "\n".join([
-            f"  - '{name}' ({length} characters)"
-            for name, length in problematic_tools
-        ])
-        
-        raise ValueError(
-            f"Tool name(s) exceed Kiro API limit of 64 characters:\n"
-            f"{tool_list}\n\n"
-            f"Solution: Use shorter tool names (max 64 characters).\n"
-            f"Example: 'get_user_data' instead of 'get_authenticated_user_profile_data_with_extended_information_about_it'"
-        )
+            short = _shorten_tool_name(tool.name)
+            _tool_name_map[short] = tool.name
+            logger.info(f"Truncated tool name '{tool.name}' -> '{short}'")
+            tool.name = short
 
 
 def convert_tools_to_kiro_format(tools: Optional[List[UnifiedTool]]) -> List[Dict[str, Any]]:
