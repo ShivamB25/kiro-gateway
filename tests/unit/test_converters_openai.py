@@ -19,8 +19,10 @@ from kiro.converters_openai import (
     _extract_images_from_tool_message,
     reasoning_effort_to_budget,
     extract_thinking_config_from_openai,
+    convert_responses_request_to_chat,
+    build_kiro_payload_from_responses,
 )
-from kiro.models_openai import ChatMessage, ChatCompletionRequest, Tool, ToolFunction
+from kiro.models_openai import ChatMessage, ChatCompletionRequest, ResponsesRequest, Tool, ToolFunction
 
 
 # ==================================================================================================
@@ -1941,3 +1943,140 @@ class TestBuildKiroPayloadIntegration:
         content = user_input["content"]
         assert not content.startswith("<thinking_mode>enabled</thinking_mode>")
         assert not content.startswith("<max_thinking_length>")
+
+
+# ==================================================================================================
+# Tests for Responses API conversion (/v1/responses, #179)
+# ==================================================================================================
+
+class TestConvertResponsesRequestToChat:
+    """Tests for convert_responses_request_to_chat."""
+
+    def test_string_input_becomes_user_message(self):
+        """
+        What it does: A plain string input becomes a single user message.
+        Purpose: The simplest Responses payload must map to Chat Completions.
+        """
+        req = ResponsesRequest(model="claude-sonnet-4.5", input="Hello there")
+        chat = convert_responses_request_to_chat(req)
+        assert chat.model == "claude-sonnet-4.5"
+        assert len(chat.messages) == 1
+        assert chat.messages[0].role == "user"
+        assert chat.messages[0].content == "Hello there"
+
+    def test_instructions_become_system_message(self):
+        """
+        What it does: instructions are prepended as a system message.
+        Purpose: Responses API instructions map to a system role.
+        """
+        req = ResponsesRequest(
+            model="claude-sonnet-4.5",
+            instructions="Be concise.",
+            input="Hi",
+        )
+        chat = convert_responses_request_to_chat(req)
+        assert chat.messages[0].role == "system"
+        assert chat.messages[0].content == "Be concise."
+        assert chat.messages[1].role == "user"
+
+    def test_input_text_content_blocks_extracted(self):
+        """
+        What it does: Typed input_text content blocks are flattened to text.
+        Purpose: Responses API uses typed content blocks, not plain strings.
+        """
+        req = ResponsesRequest(
+            model="claude-sonnet-4.5",
+            input=[
+                {"role": "user", "content": [{"type": "input_text", "text": "part one"}]},
+            ],
+        )
+        chat = convert_responses_request_to_chat(req)
+        assert chat.messages[0].role == "user"
+        assert "part one" in chat.messages[0].content
+
+    def test_function_call_and_output_items(self):
+        """
+        What it does: function_call -> assistant tool_calls; function_call_output -> tool message.
+        Purpose: Codex tool round-trips must convert to OpenAI tool semantics.
+        """
+        req = ResponsesRequest(
+            model="claude-sonnet-4.5",
+            input=[
+                {"role": "user", "content": "search please"},
+                {"type": "function_call", "call_id": "c1", "name": "search", "arguments": '{"q":"x"}'},
+                {"type": "function_call_output", "call_id": "c1", "output": "results"},
+            ],
+        )
+        chat = convert_responses_request_to_chat(req)
+        roles = [m.role for m in chat.messages]
+        assert "assistant" in roles and "tool" in roles
+        assistant = next(m for m in chat.messages if m.role == "assistant")
+        assert assistant.tool_calls[0]["function"]["name"] == "search"
+        tool_msg = next(m for m in chat.messages if m.role == "tool")
+        assert tool_msg.tool_call_id == "c1"
+        assert tool_msg.content == "results"
+
+    def test_developer_role_mapped_to_system(self):
+        """
+        What it does: A 'developer' role item maps to a system message.
+        Purpose: Responses API developer role has no Chat Completions equivalent.
+        """
+        req = ResponsesRequest(
+            model="claude-sonnet-4.5",
+            input=[{"role": "developer", "content": "internal note"}],
+        )
+        chat = convert_responses_request_to_chat(req)
+        assert chat.messages[0].role == "system"
+
+    def test_function_tools_converted_to_flat_tool(self):
+        """
+        What it does: Responses flat function tools map to Tool(input_schema=...).
+        Purpose: Tool definitions must survive the conversion.
+        """
+        req = ResponsesRequest(
+            model="claude-sonnet-4.5",
+            input="hi",
+            tools=[{
+                "type": "function",
+                "name": "get_weather",
+                "description": "Weather",
+                "parameters": {"type": "object", "properties": {}},
+            }],
+        )
+        chat = convert_responses_request_to_chat(req)
+        assert chat.tools is not None
+        assert chat.tools[0].name == "get_weather"
+        assert chat.tools[0].input_schema == {"type": "object", "properties": {}}
+
+    def test_reasoning_effort_mapped(self):
+        """
+        What it does: reasoning.effort maps to reasoning_effort on the chat request.
+        Purpose: Preserve reasoning effort across the conversion.
+        """
+        req = ResponsesRequest(
+            model="claude-sonnet-4.5",
+            input="hi",
+            reasoning={"effort": "high"},
+        )
+        chat = convert_responses_request_to_chat(req)
+        assert chat.reasoning_effort == "high"
+
+    def test_empty_input_raises(self):
+        """
+        What it does: A request with no usable input raises ValueError.
+        Purpose: The route maps this to a 400 rather than sending an empty payload.
+        """
+        req = ResponsesRequest(model="claude-sonnet-4.5", input=[])
+        with pytest.raises(ValueError):
+            convert_responses_request_to_chat(req)
+
+    def test_build_kiro_payload_from_responses(self):
+        """
+        What it does: End-to-end build of a Kiro payload from a Responses request.
+        Purpose: Ensure the Responses path produces a valid conversationState payload.
+        """
+        req = ResponsesRequest(model="claude-sonnet-4.5", input="Hello")
+        with patch("kiro.converters_openai.get_model_id_for_kiro", return_value="claude-sonnet-4.5"):
+            payload = build_kiro_payload_from_responses(req, "conv-1", "arn:aws:test")
+        assert "conversationState" in payload
+        assert payload["profileArn"] == "arn:aws:test"
