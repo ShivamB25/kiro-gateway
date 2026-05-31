@@ -19,6 +19,7 @@ from kiro.models_anthropic import (
     # Content blocks
     TextContentBlock,
     ThinkingContentBlock,
+    RedactedThinkingContentBlock,
     ToolUseContentBlock,
     ToolResultContentBlock,
     ToolReferenceContentBlock,
@@ -386,6 +387,33 @@ class TestContentBlockUnion:
         print(f"Result: {block}")
         print(f"Comparing type: Expected 'tool_result', Got '{block.type}'")
         assert block.type == "tool_result"
+
+    def test_accepts_redacted_thinking_content_block(self):
+        """
+        What it does: Verifies ContentBlock accepts redacted_thinking blocks.
+        Purpose: Ensure replayed Anthropic extended thinking does not 422 (#164).
+        """
+        print("Setup: Creating RedactedThinkingContentBlock...")
+        block: ContentBlock = RedactedThinkingContentBlock(data="encrypted-opaque-payload")
+
+        print(f"Result: {block}")
+        assert block.type == "redacted_thinking"
+        assert block.data == "encrypted-opaque-payload"
+
+    def test_message_with_redacted_thinking_validates(self):
+        """
+        What it does: A message carrying a redacted_thinking block validates.
+        Purpose: Clients replay these blocks; the schema must accept them.
+        """
+        message = AnthropicMessage(
+            role="assistant",
+            content=[
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "text", "text": "answer"},
+            ],
+        )
+        assert message.content[0].type == "redacted_thinking"
+        assert message.content[1].type == "text"
 
 
 # ==================================================================================================

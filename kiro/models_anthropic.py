@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field, model_validator
 KNOWN_CONTENT_BLOCK_TYPES = {
     "text",
     "thinking",
+    "redacted_thinking",
     "image",
     "document",
     "tool_use",
@@ -108,6 +109,24 @@ class ThinkingContentBlock(BaseModel):
     type: Literal["thinking"] = "thinking"
     thinking: str
     signature: str = ""
+
+
+class RedactedThinkingContentBlock(BaseModel):
+    """
+    Redacted thinking content block in Anthropic format.
+
+    Claude may return encrypted reasoning when extended thinking is enabled.
+    Clients can replay these blocks in later requests; the gateway accepts
+    them for schema compatibility without exposing the opaque data as prompt
+    text.
+
+    Attributes:
+        type: Always "redacted_thinking"
+        data: Opaque, encrypted reasoning payload (passed through, not decoded)
+    """
+
+    type: Literal["redacted_thinking"] = "redacted_thinking"
+    data: str
 
 
 class ToolUseContentBlock(BaseModel):
@@ -308,6 +327,7 @@ class DocumentContentBlock(BaseModel):
 ContentBlock = Union[
     TextContentBlock,
     ThinkingContentBlock,
+    RedactedThinkingContentBlock,
     ImageContentBlock,
     DocumentContentBlock,
     ToolUseContentBlock,

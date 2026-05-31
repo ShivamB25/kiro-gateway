@@ -39,6 +39,12 @@ from kiro.converters_core import (
     UnifiedMessage,
     UnifiedTool,
     ThinkingConfig,
+    NativeThinkingConfig,
+    reasoning_effort_to_budget,
+    supports_native_adaptive_thinking,
+    normalize_native_thinking_effort,
+    build_native_thinking_config,
+    apply_native_thinking_fields,
 )
 
 # Test data for images - 1x1 pixel JPEG
@@ -2561,6 +2567,113 @@ class TestEnsureAssistantBeforeToolResults:
 # ==================================================================================================
 # Tests for sanitize_json_schema
 # ==================================================================================================
+
+class TestNativeThinkingConfig:
+    """Tests for native Kiro/Claude adaptive thinking helpers (#192)."""
+
+    def test_reasoning_effort_to_budget_known_levels(self):
+        """
+        What it does: Maps effort levels to percentage-based budgets.
+        Purpose: Budget must scale with max_tokens per the documented ratios.
+        """
+        assert reasoning_effort_to_budget(4096, "high") == int(4096 * 0.80)
+        assert reasoning_effort_to_budget(10000, "medium") == 5000
+        assert reasoning_effort_to_budget(1000, "max") == 1000
+        assert reasoning_effort_to_budget(1000, "none") == 0
+
+    def test_reasoning_effort_to_budget_unknown_raises(self):
+        """
+        What it does: Unknown effort levels raise ValueError.
+        Purpose: Callers rely on this to fall back to a default budget.
+        """
+        with pytest.raises(ValueError):
+            reasoning_effort_to_budget(1000, "bogus")
+
+    def test_supports_native_adaptive_thinking(self):
+        """
+        What it does: Detects models known to support adaptive thinking.
+        Purpose: Native fields must only be added for supported models.
+        """
+        assert supports_native_adaptive_thinking("claude-opus-4.8") is True
+        assert supports_native_adaptive_thinking("CLAUDE-SONNET-4.6") is True
+        assert supports_native_adaptive_thinking("claude-haiku-4.5") is False
+
+    def test_normalize_native_thinking_effort(self):
+        """
+        What it does: Normalizes client effort values to native effort levels.
+        Purpose: 'minimal' maps to 'low', 'none'/unknown disable native thinking.
+        """
+        assert normalize_native_thinking_effort(None) is None
+        assert normalize_native_thinking_effort("none") is None
+        assert normalize_native_thinking_effort("minimal") == "low"
+        assert normalize_native_thinking_effort("high") == "high"
+        assert normalize_native_thinking_effort("max") == "max"
+        assert normalize_native_thinking_effort("weird") is None
+
+    def test_build_native_thinking_config_off_by_default(self):
+        """
+        What it does: With mode 'off', native thinking is always disabled.
+        Purpose: Default behavior must preserve existing fake-reasoning flow.
+        """
+        from unittest.mock import patch
+        with patch("kiro.converters_core.KIRO_NATIVE_THINKING_MODE", "off"):
+            cfg = build_native_thinking_config("claude-opus-4.8", "high")
+        assert cfg.enabled is False
+
+    def test_build_native_thinking_config_auto_requires_effort(self):
+        """
+        What it does: In 'auto' mode, native thinking needs a client effort.
+        Purpose: Without an explicit effort, auto mode stays disabled.
+        """
+        from unittest.mock import patch
+        with patch("kiro.converters_core.KIRO_NATIVE_THINKING_MODE", "auto"):
+            enabled = build_native_thinking_config("claude-opus-4.8", "high")
+            disabled = build_native_thinking_config("claude-opus-4.8", None)
+            unsupported = build_native_thinking_config("claude-haiku-4.5", "high")
+        assert enabled.enabled is True
+        assert enabled.effort == "high"
+        assert disabled.enabled is False
+        assert unsupported.enabled is False
+
+    def test_build_native_thinking_config_force_defaults_high(self):
+        """
+        What it does: In 'force' mode, supported models enable without effort.
+        Purpose: Force mode defaults the effort to 'high'.
+        """
+        from unittest.mock import patch
+        with patch("kiro.converters_core.KIRO_NATIVE_THINKING_MODE", "force"):
+            cfg = build_native_thinking_config("claude-opus-4.8", None)
+            unsupported = build_native_thinking_config("claude-haiku-4.5", None)
+        assert cfg.enabled is True
+        assert cfg.effort == "high"
+        assert unsupported.enabled is False
+
+    def test_apply_native_thinking_fields_noop_when_disabled(self):
+        """
+        What it does: A disabled config leaves the payload unchanged.
+        Purpose: Guard against accidentally adding thinking fields.
+        """
+        payload = {"conversationState": {"currentMessage": {"userInputMessage": {}}}}
+        apply_native_thinking_fields(payload, NativeThinkingConfig(enabled=False))
+        assert "thinking" not in payload
+        assert "output_config" not in payload
+
+    def test_apply_native_thinking_fields_adds_top_level_and_message(self):
+        """
+        What it does: An enabled config adds adaptive thinking + effort fields
+        both at the payload top level and inside userInputMessage.
+        Purpose: Kiro expects the fields in both places.
+        """
+        payload = {"conversationState": {"currentMessage": {"userInputMessage": {}}}}
+        cfg = NativeThinkingConfig(enabled=True, effort="max", display="omitted")
+        apply_native_thinking_fields(payload, cfg)
+
+        assert payload["thinking"] == {"type": "adaptive", "display": "omitted"}
+        assert payload["output_config"] == {"effort": "max"}
+        uim = payload["conversationState"]["currentMessage"]["userInputMessage"]
+        assert uim["thinking"] == {"type": "adaptive", "display": "omitted"}
+        assert uim["outputConfig"] == {"effort": "max"}
+
 
 class TestSanitizeJsonSchema:
     """
